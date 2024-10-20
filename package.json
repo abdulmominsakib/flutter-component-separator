@@ -37,5 +37,11 @@
     "eslint": "^8.26.0",
     "typescript": "^4.8.4",
     "@vscode/test-electron": "^2.1.5"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/abdulmominsakib/flutter-component-separator.git"
+  },
+  "license": "MIT",
+  "publisher": "momin.pro"
 }
