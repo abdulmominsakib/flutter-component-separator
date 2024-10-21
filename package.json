@@ -2,7 +2,7 @@
   "name": "flutter-component-separator",
   "displayName": "Flutter Component Separator",
   "description": "Separates Flutter components into individual files",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "engines": {
     "vscode": "^1.60.0"
   },
@@ -43,5 +43,5 @@
     "url": "https://github.com/abdulmominsakib/flutter-component-separator.git"
   },
   "license": "MIT",
-  "publisher": "momin.pro"
+  "publisher": "AbdulMominSakib"
 }
