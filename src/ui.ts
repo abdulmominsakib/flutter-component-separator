@@ -137,9 +137,12 @@ export async function showSummary(
 }
 
 export async function confirmMakePublic(className: string): Promise<boolean> {
-  const choice = await vscode.window.showQuickPick(['Yes', 'No'], {
-    placeHolder: `Make private widget ${className} public?`,
-  });
+  const choice = await vscode.window.showInformationMessage(
+    `Make private widget ${className} public?`,
+    { modal: true },
+    'Yes',
+    'No'
+  );
   return choice === 'Yes';
 }
 
@@ -170,14 +173,9 @@ export function showProgress<T>(
     },
     async (progress) => {
       progress.report({ increment: 0 });
-      try {
-        const result = await task();
-        progress.report({ increment: 100 });
-        return result;
-      } catch (err) {
-        vscode.window.showErrorMessage(`Operation failed: ${err}`);
-        throw err;
-      }
+      const result = await task();
+      progress.report({ increment: 100 });
+      return result;
     }
   );
 }

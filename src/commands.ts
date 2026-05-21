@@ -1,5 +1,4 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
 import { parseFile, WidgetClass } from './parser';
 import { convertStatefulToStateless, replaceWidgetPairInContent } from './converter';
 import {
@@ -28,6 +27,20 @@ import { updateStatusBar } from './statusBar';
 async function applyDocumentEdit(filePath: string, newContent: string): Promise<void> {
   const docUri = vscode.Uri.file(filePath);
   const doc = await vscode.workspace.openTextDocument(docUri);
+
+  if (doc.isDirty) {
+    const choice = await vscode.window.showWarningMessage(
+      'The file has unsaved changes. Save before applying refactor?',
+      { modal: true },
+      'Save and Continue',
+      'Cancel'
+    );
+    if (choice !== 'Save and Continue') {
+      throw new Error('Refactor cancelled — file has unsaved changes.');
+    }
+    await doc.save();
+  }
+
   const edit = new vscode.WorkspaceEdit();
   const fullRange = new vscode.Range(
     doc.positionAt(0),
@@ -373,7 +386,7 @@ export async function refactorFlutterCommand(): Promise<void> {
     const hasExtraClasses = parsed.widgets.length > 1;
 
     const config = getConfig();
-    let operation: 'separate' | 'convert' | 'refactor' | 'ask' | undefined = config.defaultOperation as 'separate' | 'convert' | 'refactor' | 'ask';
+    let operation: 'separate' | 'convert' | 'refactor' | 'ask' | undefined = config.defaultOperation;
 
     // Validate that the default operation is actually available
     if (operation === 'separate' && !hasExtraClasses) {

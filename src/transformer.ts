@@ -1,5 +1,164 @@
 import { WidgetClass } from './parser';
 
+// Find all string literal and comment regions in Dart code
+function findProtectedRegions(text: string): Array<{ start: number; end: number }> {
+  const regions: Array<{ start: number; end: number }> = [];
+  let i = 0;
+
+  while (i < text.length) {
+    const ch = text[i];
+    const next = i + 1 < text.length ? text[i + 1] : '';
+
+    // Line comment
+    if (ch === '/' && next === '/') {
+      const start = i;
+      let j = i + 2;
+      while (j < text.length && text[j] !== '\n') { j++; }
+      regions.push({ start, end: j });
+      i = j;
+      continue;
+    }
+
+    // Block comment
+    if (ch === '/' && next === '*') {
+      const start = i;
+      let j = i + 2;
+      while (j < text.length - 1) {
+        if (text[j] === '*' && text[j + 1] === '/') {
+          regions.push({ start, end: j + 2 });
+          i = j + 2;
+          break;
+        }
+        j++;
+      }
+      if (j >= text.length - 1) {
+        regions.push({ start, end: text.length });
+        i = text.length;
+      }
+      continue;
+    }
+
+    // Raw string: r"..." or r'...'
+    if (ch === 'r' && (next === '"' || next === "'")) {
+      const quote = next;
+      const start = i;
+      let j = i + 2;
+      while (j < text.length) {
+        if (text[j] === quote) {
+          regions.push({ start, end: j + 1 });
+          i = j + 1;
+          break;
+        }
+        j++;
+      }
+      if (j >= text.length) {
+        regions.push({ start, end: text.length });
+        i = text.length;
+      }
+      continue;
+    }
+
+    // Triple-quoted string
+    if ((ch === '"' || ch === "'") && next === ch && i + 2 < text.length && text[i + 2] === ch) {
+      const start = i;
+      let j = i + 3;
+      while (j < text.length - 2) {
+        if (text[j] === ch && text[j + 1] === ch && text[j + 2] === ch) {
+          regions.push({ start, end: j + 3 });
+          i = j + 3;
+          break;
+        }
+        j++;
+      }
+      if (j >= text.length - 2) {
+        regions.push({ start, end: text.length });
+        i = text.length;
+      }
+      continue;
+    }
+
+    // Single-quoted string
+    if (ch === '"' || ch === "'") {
+      const start = i;
+      let j = i + 1;
+      let escaped = false;
+      while (j < text.length) {
+        if (escaped) {
+          escaped = false;
+          j++;
+          continue;
+        }
+        if (text[j] === '\\') {
+          escaped = true;
+          j++;
+          continue;
+        }
+        if (text[j] === ch) {
+          regions.push({ start, end: j + 1 });
+          i = j + 1;
+          break;
+        }
+        j++;
+      }
+      if (j >= text.length) {
+        regions.push({ start, end: text.length });
+        i = text.length;
+      }
+      continue;
+    }
+
+    i++;
+  }
+
+  return regions;
+}
+
+// Check if a position is inside any protected region
+function isProtected(pos: number, regions: Array<{ start: number; end: number }>): boolean {
+  for (const r of regions) {
+    if (pos >= r.start && pos < r.end) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Replace a pattern globally, but only outside of Dart string literals and comments.
+ * This prevents accidental replacements inside string values and comments.
+ * @param replacer A function that receives the RegExp match array and returns the replacement string.
+ */
+export function safeReplace(
+  text: string,
+  pattern: RegExp,
+  replacer: (match: RegExpExecArray) => string
+): string {
+  const regions = findProtectedRegions(text);
+  let result = '';
+  let lastIndex = 0;
+
+  // We need to scan manually because we skip matches in protected regions
+  const globalPattern = new RegExp(
+    pattern.source,
+    pattern.flags.includes('g') ? pattern.flags : pattern.flags + 'g'
+  );
+  let match: RegExpExecArray | null;
+
+  while ((match = globalPattern.exec(text)) !== null) {
+    if (!isProtected(match.index, regions)) {
+      result += text.substring(lastIndex, match.index) + replacer(match);
+      lastIndex = match.index + match[0].length;
+    }
+    // Reset lastIndex manually for the next iteration
+    if (match.index === globalPattern.lastIndex) {
+      globalPattern.lastIndex++;
+    }
+  }
+
+  result += text.substring(lastIndex);
+  return result;
+}
+
 export function pascalToSnake(className: string): string {
   return className
     .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
@@ -46,7 +205,7 @@ export function updateReferencesInFile(
   newClassName: string
 ): string {
   const classRefRegex = new RegExp(`\\b${oldClassName}\\b`, 'g');
-  return content.replace(classRefRegex, newClassName);
+  return safeReplace(content, classRefRegex, () => newClassName);
 }
 
 export function insertImportsAfterExisting(

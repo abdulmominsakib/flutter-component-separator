@@ -7,16 +7,8 @@ export function ensureDir(dirPath: string): void {
   }
 }
 
-export function writeFile(filePath: string, content: string): void {
+function writeFile(filePath: string, content: string): void {
   fs.writeFileSync(filePath, content);
-}
-
-export function readFile(filePath: string): string {
-  return fs.readFileSync(filePath, 'utf8');
-}
-
-export function getFileName(filePath: string): string {
-  return path.basename(filePath);
 }
 
 export function getDirName(filePath: string): string {

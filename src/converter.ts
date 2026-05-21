@@ -23,18 +23,7 @@ function buildConstructorFields(fields: Array<{ name: string; type: string }>): 
 }
 
 function replaceWidgetPrefix(buildBody: string, widgetName: string): string {
-  return buildBody.replace(/widget\.(\w+)/g, (_full: string, prop: string) => {
-    return prop;
-  });
-}
-
-function replaceStateFields(buildBody: string, fields: Array<{ name: string }>): string {
-  let result = buildBody;
-  for (const field of fields) {
-    const regex = new RegExp(`\\b${field.name}\\b`, 'g');
-    result = result.replace(regex, field.name);
-  }
-  return result;
+  return buildBody.replace(/widget\.(\w+)/g, (_full: string, prop: string) => prop);
 }
 
 function stripLifecycleComments(state: StateClass): string {
@@ -85,7 +74,6 @@ export function convertStatefulToStateless(
 
   let buildBody = state.buildMethodBody;
   buildBody = replaceWidgetPrefix(buildBody, widget.name);
-  buildBody = replaceStateFields(buildBody, state.stateFields);
 
   const commentsBlock = stripLifecycleComments(state);
 

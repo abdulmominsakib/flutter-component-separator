@@ -26,14 +26,22 @@ export function clearParseCache(uri?: vscode.Uri): void {
   }
 }
 
-export function getConfig(): { defaultOperation: string; componentsFolderName: string; showStatusBar: boolean } {
+export type DefaultOperation = 'ask' | 'separate' | 'convert' | 'refactor';
+
+export interface ExtensionConfig {
+  defaultOperation: DefaultOperation;
+  componentsFolderName: string;
+  showStatusBar: boolean;
+}
+
+export function getConfig(): ExtensionConfig {
   const cfg = vscode.workspace.getConfiguration('flutterComponentSeparator');
   const defaultOp = cfg.get<string>('defaultOperation', 'ask');
-  const validOps = ['ask', 'separate', 'convert', 'refactor'];
+  const validOps: DefaultOperation[] = ['ask', 'separate', 'convert', 'refactor'];
   const folderName = cfg.get<string>('componentsFolderName', 'components') || 'components';
 
   return {
-    defaultOperation: validOps.includes(defaultOp) ? defaultOp : 'ask',
+    defaultOperation: validOps.includes(defaultOp as DefaultOperation) ? (defaultOp as DefaultOperation) : 'ask',
     componentsFolderName: sanitizeFolderName(folderName),
     showStatusBar: cfg.get<boolean>('showStatusBar', true),
   };
