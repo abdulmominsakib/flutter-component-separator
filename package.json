@@ -10,14 +10,24 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:extension.separateFlutterComponents"
+    "onCommand:extension.separateFlutterComponents",
+    "onCommand:extension.convertToStatelessWidget",
+    "onCommand:extension.refactorFlutter"
   ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
         "command": "extension.separateFlutterComponents",
-        "title": "Separate Flutter Components"
+        "title": "Flutter: Separate Components into Files"
+      },
+      {
+        "command": "extension.convertToStatelessWidget",
+        "title": "Flutter: Convert StatefulWidget to StatelessWidget"
+      },
+      {
+        "command": "extension.refactorFlutter",
+        "title": "Flutter: Full Refactor (Interactive Preview)"
       }
     ]
   },
@@ -26,7 +36,7 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile",
-    "lint": "eslint src --ext ts",
+    "lint": "eslint src",
     "test": "node ./out/test/runTest.js"
   },
   "devDependencies": {
