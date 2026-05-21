@@ -130,15 +130,11 @@ export async function showSummary(
     msg += ` Main widget: ${mainWidgetName}.`;
   }
 
-  vscode.window.showInformationMessage(msg);
-
   if (warnings.length > 0) {
-    const warningItems = warnings.map(w => `- ${w}`);
-    vscode.window.showWarningMessage(
-      `Conversion warnings:\n${warningItems.join('\n')}`,
-      { modal: false }
-    );
+    msg += ` (${warnings.length} warning${warnings.length > 1 ? 's' : ''})`;
   }
+
+  vscode.window.showInformationMessage(msg, 'OK');
 }
 
 export async function confirmMakePublic(className: string): Promise<boolean> {
@@ -169,10 +165,15 @@ export function showProgress<T>(
 ): Thenable<T> {
   return vscode.window.withProgress(
     {
-      location: vscode.ProgressLocation.Window,
+      location: vscode.ProgressLocation.Notification,
       title,
       cancellable: false,
     },
-    async () => task()
+    async (progress) => {
+      progress.report({ increment: 0 });
+      const result = await task();
+      progress.report({ increment: 100 });
+      return result;
+    }
   );
 }

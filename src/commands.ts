@@ -12,7 +12,7 @@ import {
   stripClassFromContent,
   wrapWithImports,
 } from './transformer';
-import { ensureDir, writeFile, getFileName, getDirName, joinPath } from './fileOps';
+import { ensureDir, writeFile, getDirName, joinPath } from './fileOps';
 import {
   pickOperation,
   pickTargetWidgets,
@@ -21,10 +21,13 @@ import {
   confirmMakePublic,
   showProgress,
 } from './ui';
+import { getConfig } from './config';
+import { updateStatusBar } from './statusBar';
 
 async function separateComponents(text: string, filePath: string): Promise<boolean> {
   const dirName = getDirName(filePath);
-  const componentsDir = joinPath(dirName, 'components');
+  const config = getConfig();
+  const componentsDir = joinPath(dirName, config.componentsFolderName);
   ensureDir(componentsDir);
 
   const parsed = parseFile(text);
@@ -63,7 +66,7 @@ async function separateComponents(text: string, filePath: string): Promise<boole
     const componentFileName = `${pascalToSnake(className)}.dart`;
     const componentFilePath = joinPath(componentsDir, componentFileName);
 
-    const newImport = `import 'components/${componentFileName}';`;
+      const newImport = `import '${config.componentsFolderName}/${componentFileName}';`;
     mainContent = insertImportsAfterExisting(mainContent, [newImport]);
     mainContent = stripClassFromContent(mainContent, widget.fullMatch);
 
@@ -73,7 +76,6 @@ async function separateComponents(text: string, filePath: string): Promise<boole
   mainContent = cleanBlankLines(mainContent);
 
   const mainWidgetName = parsed.widgets[0]?.name || '';
-  const modifiedFileName = `${path.basename(filePath, '.dart')}_separated.dart`;
   const confirmed = await showDiffPreview(
     text,
     mainContent,
@@ -153,7 +155,8 @@ async function convertToStateless(text: string, filePath: string): Promise<boole
 async function fullRefactor(text: string, filePath: string): Promise<boolean> {
   const parsed = parseFile(text);
   const dirName = getDirName(filePath);
-  const componentsDir = joinPath(dirName, 'components');
+  const config = getConfig();
+  const componentsDir = joinPath(dirName, config.componentsFolderName);
   ensureDir(componentsDir);
 
   let mainContent = text;
@@ -208,7 +211,7 @@ async function fullRefactor(text: string, filePath: string): Promise<boolean> {
       const componentFileName = `${pascalToSnake(className)}.dart`;
       const componentFilePath = joinPath(componentsDir, componentFileName);
 
-      const newImport = `import 'components/${componentFileName}';`;
+    const newImport = `import '${config.componentsFolderName}/${componentFileName}';`;
       mainContent = insertImportsAfterExisting(mainContent, [newImport]);
       mainContent = stripClassFromContent(mainContent, widget.fullMatch);
 
@@ -275,6 +278,8 @@ export async function separateFlutterComponentsCommand(): Promise<void> {
   await showProgress('Separating Flutter components...', async () => {
     await separateComponents(text, filePath);
   });
+
+  updateStatusBar();
 }
 
 export async function convertToStatelessCommand(): Promise<void> {
@@ -291,6 +296,8 @@ export async function convertToStatelessCommand(): Promise<void> {
   await showProgress('Converting to StatelessWidget...', async () => {
     await convertToStateless(text, filePath);
   });
+
+  updateStatusBar();
 }
 
 export async function refactorFlutterCommand(): Promise<void> {
@@ -308,7 +315,22 @@ export async function refactorFlutterCommand(): Promise<void> {
   const hasStatefulWidgets = parsed.widgets.some(w => w.isStatefulWidget && parsed.stateMap.has(parsed.widgets.indexOf(w)));
   const hasExtraClasses = parsed.widgets.length > 1;
 
-  const operation = await pickOperation(hasStatefulWidgets, hasExtraClasses);
+  const config = getConfig();
+  let operation: 'separate' | 'convert' | 'refactor' | 'ask' | undefined = config.defaultOperation;
+
+  // Validate that the default operation is actually available
+  if (operation === 'separate' && !hasExtraClasses) {
+    operation = 'ask';
+  } else if (operation === 'convert' && !hasStatefulWidgets) {
+    operation = 'ask';
+  } else if (operation === 'refactor' && !hasExtraClasses && !hasStatefulWidgets) {
+    operation = 'ask';
+  }
+
+  if (operation === 'ask' || !operation) {
+    operation = await pickOperation(hasStatefulWidgets, hasExtraClasses);
+  }
+
   if (!operation) { return; }
 
   await showProgress('Processing Flutter refactor...', async () => {
@@ -324,4 +346,6 @@ export async function refactorFlutterCommand(): Promise<void> {
         break;
     }
   });
+
+  updateStatusBar();
 }

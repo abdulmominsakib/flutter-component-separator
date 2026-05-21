@@ -2,7 +2,7 @@
   "name": "flutter-component-separator",
   "displayName": "Flutter Component Separator",
   "description": "Separates Flutter components into individual files",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "engines": {
     "vscode": "^1.60.0"
   },
@@ -12,24 +12,101 @@
   "activationEvents": [
     "onCommand:extension.separateFlutterComponents",
     "onCommand:extension.convertToStatelessWidget",
-    "onCommand:extension.refactorFlutter"
+    "onCommand:extension.refactorFlutter",
+    "onLanguage:dart"
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "configuration": {
+      "title": "Flutter Component Separator",
+      "properties": {
+        "flutterComponentSeparator.defaultOperation": {
+          "type": "string",
+          "default": "ask",
+          "enum": ["ask", "separate", "convert", "refactor"],
+          "enumDescriptions": [
+            "Always show the operation picker",
+            "Automatically run Separate Components when available",
+            "Automatically run Convert to StatelessWidget when available",
+            "Automatically run Full Refactor when available"
+          ],
+          "description": "Default operation to run when triggering the extension"
+        },
+        "flutterComponentSeparator.componentsFolderName": {
+          "type": "string",
+          "default": "components",
+          "description": "Folder name for separated component files"
+        },
+        "flutterComponentSeparator.showStatusBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show status bar item when a Dart file with widgets is active"
+        }
+      }
+    },
     "commands": [
       {
         "command": "extension.separateFlutterComponents",
-        "title": "Flutter: Separate Components into Files"
+        "title": "Separate Components into Files",
+        "category": "Flutter",
+        "icon": "$(files)"
       },
       {
         "command": "extension.convertToStatelessWidget",
-        "title": "Flutter: Convert StatefulWidget to StatelessWidget"
+        "title": "Convert StatefulWidget to StatelessWidget",
+        "category": "Flutter",
+        "icon": "$(symbol-class)"
       },
       {
         "command": "extension.refactorFlutter",
-        "title": "Flutter: Full Refactor (Interactive Preview)"
+        "title": "Full Refactor (Interactive Preview)",
+        "category": "Flutter",
+        "icon": "$(sparkle)"
       }
-    ]
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "when": "resourceExtname == .dart",
+          "command": "extension.separateFlutterComponents",
+          "group": "2_flutter@1"
+        },
+        {
+          "when": "resourceExtname == .dart",
+          "command": "extension.convertToStatelessWidget",
+          "group": "2_flutter@2"
+        },
+        {
+          "when": "resourceExtname == .dart",
+          "command": "extension.refactorFlutter",
+          "group": "2_flutter@3"
+        }
+      ],
+      "editor/context": [
+        {
+          "when": "resourceExtname == .dart",
+          "command": "extension.separateFlutterComponents",
+          "group": "2_flutter@1"
+        },
+        {
+          "when": "resourceExtname == .dart",
+          "command": "extension.convertToStatelessWidget",
+          "group": "2_flutter@2"
+        },
+        {
+          "when": "resourceExtname == .dart",
+          "command": "extension.refactorFlutter",
+          "group": "2_flutter@3"
+        }
+      ],
+      "editor/title": [
+        {
+          "when": "resourceExtname == .dart",
+          "command": "extension.refactorFlutter",
+          "group": "navigation"
+        }
+      ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",

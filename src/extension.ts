@@ -4,6 +4,8 @@ import {
   convertToStatelessCommand,
   refactorFlutterCommand,
 } from './commands';
+import { FlutterCodeActionProvider } from './codeActionProvider';
+import { createStatusBarItem, updateStatusBar } from './statusBar';
 
 export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
@@ -25,6 +27,25 @@ export function activate(context: vscode.ExtensionContext) {
       'extension.refactorFlutter',
       refactorFlutterCommand
     )
+  );
+
+  // Register Code Action Provider for Dart files
+  context.subscriptions.push(
+    vscode.languages.registerCodeActionsProvider(
+      { language: 'dart' },
+      new FlutterCodeActionProvider(),
+      {
+        providedCodeActionKinds: FlutterCodeActionProvider.providedCodeActionKinds,
+      }
+    )
+  );
+
+  // Initialize status bar
+  createStatusBarItem(context);
+
+  // Refresh status bar when configuration changes
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration(() => updateStatusBar())
   );
 }
 
