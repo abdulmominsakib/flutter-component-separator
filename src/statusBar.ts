@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
-import { parseFile } from './parser';
-import { getConfig } from './config';
+import { parseFile, ParsedFile } from './parser';
+import { getConfig, getCachedParse, setCachedParse } from './config';
 
 let statusBarItem: vscode.StatusBarItem | undefined;
 
@@ -36,8 +36,13 @@ export function updateStatusBar(): void {
     return;
   }
 
-  const text = editor.document.getText();
-  const parsed = parseFile(text);
+  // Use cached parse if available
+  let parsed: ParsedFile | null = getCachedParse(editor.document);
+  if (!parsed) {
+    const text = editor.document.getText();
+    parsed = parseFile(text);
+    setCachedParse(editor.document, parsed);
+  }
 
   if (parsed.widgets.length === 0) {
     statusBarItem.hide();
@@ -45,9 +50,7 @@ export function updateStatusBar(): void {
   }
 
   const widgetCount = parsed.widgets.length;
-  const statefulCount = parsed.widgets.filter(
-    (w, i) => w.isStatefulWidget && parsed.stateMap.has(i)
-  ).length;
+  const statefulCount = parsed.stateMap.size;
 
   let tooltip = 'Flutter Component Separator';
   if (widgetCount > 1) {
@@ -58,7 +61,8 @@ export function updateStatusBar(): void {
   }
   tooltip += '\nClick to run Full Refactor';
 
-  statusBarItem.text = `$(flutter) ${widgetCount} widget${widgetCount > 1 ? 's' : ''}${statefulCount > 0 ? ` · ${statefulCount} stateful` : ''}`;
+  // Use a generic widget icon instead of Flutter-specific one
+  statusBarItem.text = `$(symbol-class) ${widgetCount} widget${widgetCount > 1 ? 's' : ''}${statefulCount > 0 ? ` · ${statefulCount} stateful` : ''}`;
   statusBarItem.tooltip = tooltip;
   statusBarItem.show();
 }

@@ -41,19 +41,124 @@ export interface ParsedFile {
 
 const IMPORT_REGEX = /^import\s+['"]([^'"]+)['"];?\s*$/gm;
 
-const CLASS_REGEX = /class\s+(_?)(\w+)\s+extends\s+([\w<>,\s]+?)\s*\{[\s\S]*?^\}/gm;
+const CLASS_DECL_REGEX = /class\s+(_?)(\w+)\s+extends\s+([\w<>,\s]+?)\s*\{/gm;
 
 const STATEFUL_WIDGET_RE = /extends\s+StatefulWidget\b/;
 const STATELESS_WIDGET_RE = /extends\s+StatelessWidget\b/;
 
-function findMatchingBrace(text: string, startIndex: number): number {
-  let depth = 0;
-  for (let i = startIndex; i < text.length; i++) {
-    if (text[i] === '{') { depth++; }
-    if (text[i] === '}') {
-      depth--;
-      if (depth === 0) { return i; }
+function skipString(text: string, i: number): number {
+  const quote = text[i];
+  let j = i + 1;
+  let escaped = false;
+  while (j < text.length) {
+    if (escaped) {
+      escaped = false;
+      j++;
+      continue;
     }
+    if (text[j] === '\\') {
+      escaped = true;
+      j++;
+      continue;
+    }
+    if (text[j] === quote) {
+      return j + 1;
+    }
+    j++;
+  }
+  return text.length;
+}
+
+function skipRawString(text: string, i: number): number {
+  // r"..." or r'...'
+  const quote = text[i + 1];
+  if (!quote || (quote !== '"' && quote !== "'")) { return i + 1; }
+  let j = i + 2;
+  while (j < text.length) {
+    if (text[j] === quote) {
+      return j + 1;
+    }
+    j++;
+  }
+  return text.length;
+}
+
+function skipTripleQuotedString(text: string, i: number): number {
+  const quote = text[i];
+  if (text[i + 1] !== quote || text[i + 2] !== quote) { return i + 1; }
+  let j = i + 3;
+  while (j < text.length - 2) {
+    if (text[j] === quote && text[j + 1] === quote && text[j + 2] === quote) {
+      return j + 3;
+    }
+    j++;
+  }
+  return text.length;
+}
+
+function skipLineComment(text: string, i: number): number {
+  let j = i + 2;
+  while (j < text.length && text[j] !== '\n') {
+    j++;
+  }
+  return j;
+}
+
+function skipBlockComment(text: string, i: number): number {
+  let j = i + 2;
+  while (j < text.length - 1) {
+    if (text[j] === '*' && text[j + 1] === '/') {
+      return j + 2;
+    }
+    j++;
+  }
+  return text.length;
+}
+
+export function findMatchingBrace(text: string, startIndex: number): number {
+  let depth = 0;
+  let i = startIndex;
+  while (i < text.length) {
+    const ch = text[i];
+
+    // Skip strings
+    if (ch === '"' || ch === "'") {
+      // Check for triple-quoted
+      if (i + 2 < text.length && text[i + 1] === ch && text[i + 2] === ch) {
+        i = skipTripleQuotedString(text, i);
+        continue;
+      }
+      // Check for raw string
+      if (i > 0 && text[i - 1] === 'r') {
+        i = skipRawString(text, i - 1);
+        continue;
+      }
+      i = skipString(text, i);
+      continue;
+    }
+
+    // Skip comments
+    if (ch === '/' && i + 1 < text.length) {
+      const next = text[i + 1];
+      if (next === '/') {
+        i = skipLineComment(text, i);
+        continue;
+      }
+      if (next === '*') {
+        i = skipBlockComment(text, i);
+        continue;
+      }
+    }
+
+    if (ch === '{') {
+      depth++;
+    } else if (ch === '}') {
+      depth--;
+      if (depth === 0) {
+        return i;
+      }
+    }
+    i++;
   }
   return text.length - 1;
 }
@@ -97,35 +202,30 @@ function extractBuildMethodBody(stateBody: string): string {
 }
 
 function findStateClass(text: string, widgetName: string, widgetIndex: number): StateClass | null {
-  const patterns = [
-    new RegExp(`class\\s+_${widgetName}State\\s+extends\\s+State<${widgetName}>\\s*\\{`),
-    new RegExp(`class\\s+_${widgetName}State\\s+extends\\s+State<${widgetName}>\\s*\\{`),
-  ];
+  const pattern = new RegExp(`class\\s+_${widgetName}State\\s+extends\\s+State<${widgetName}>\\s*\\{`);
 
-  for (const pattern of patterns) {
-    const match = pattern.exec(text);
-    if (match) {
-      const classStart = match.index;
-      const bodyStart = match.index + match[0].length - 1;
-      const bodyEnd = findMatchingBrace(text, bodyStart);
-      const fullMatch = text.substring(classStart, bodyEnd + 1);
-      const stateBody = text.substring(bodyStart + 1, bodyEnd);
+  const match = pattern.exec(text);
+  if (match) {
+    const classStart = match.index;
+    const bodyStart = match.index + match[0].length - 1;
+    const bodyEnd = findMatchingBrace(text, bodyStart);
+    const fullMatch = text.substring(classStart, bodyEnd + 1);
+    const stateBody = text.substring(bodyStart + 1, bodyEnd);
 
-      return {
-        fullMatch,
-        name: `_${widgetName}State`,
-        widgetName,
-        buildMethodBody: extractBuildMethodBody(stateBody),
-        stateFields: extractStateFields(stateBody),
-        hasSetState: /\bsetState\s*\(/.test(stateBody),
-        hasInitState: /void\s+initState\s*\(/.test(stateBody),
-        hasDispose: /void\s+dispose\s*\(/.test(stateBody),
-        hasDidChangeDependencies: /void\s+didChangeDependencies\s*\(/.test(stateBody),
-        hasDidUpdateWidget: /void\s+didUpdateWidget\s*\(/.test(stateBody),
-        startOffset: classStart,
-        endOffset: bodyEnd + 1,
-      };
-    }
+    return {
+      fullMatch,
+      name: `_${widgetName}State`,
+      widgetName,
+      buildMethodBody: extractBuildMethodBody(stateBody),
+      stateFields: extractStateFields(stateBody),
+      hasSetState: /\bsetState\s*\(/.test(stateBody),
+      hasInitState: /void\s+initState\s*\(/.test(stateBody),
+      hasDispose: /void\s+dispose\s*\(/.test(stateBody),
+      hasDidChangeDependencies: /void\s+didChangeDependencies\s*\(/.test(stateBody),
+      hasDidUpdateWidget: /void\s+didUpdateWidget\s*\(/.test(stateBody),
+      startOffset: classStart,
+      endOffset: bodyEnd + 1,
+    };
   }
 
   return null;
@@ -141,15 +241,16 @@ export function parseFile(text: string): ParsedFile {
   }
 
   const widgets: WidgetClass[] = [];
-  const widgetOffsets: number[] = [];
 
-  const classRegex = new RegExp(CLASS_REGEX.source, 'gm');
-  while ((match = classRegex.exec(text)) !== null) {
-    const fullMatch = match[0];
+  const classDeclRegex = new RegExp(CLASS_DECL_REGEX.source, 'gm');
+  while ((match = classDeclRegex.exec(text)) !== null) {
     const startOffset = match.index;
+    const bodyStart = match.index + match[0].length - 1; // position of '{'
+    const bodyEnd = findMatchingBrace(text, bodyStart);
+    const fullMatch = text.substring(startOffset, bodyEnd + 1);
     const isPrivate = match[1] === '_';
     const name = match[2];
-    const baseClass = match[3];
+    const baseClass = match[3].trim();
     const isStatefulWidget = STATEFUL_WIDGET_RE.test(fullMatch);
 
     widgets.push({
@@ -160,9 +261,8 @@ export function parseFile(text: string): ParsedFile {
       baseClass,
       isStatefulWidget,
       startOffset,
-      endOffset: startOffset + fullMatch.length,
+      endOffset: bodyEnd + 1,
     });
-    widgetOffsets.push(startOffset);
   }
 
   const stateMap = new Map<number, StateClass>();

@@ -6,6 +6,7 @@ import {
 } from './commands';
 import { FlutterCodeActionProvider } from './codeActionProvider';
 import { createStatusBarItem, updateStatusBar } from './statusBar';
+import { clearParseCache } from './config';
 
 export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
@@ -29,10 +30,10 @@ export function activate(context: vscode.ExtensionContext) {
     )
   );
 
-  // Register Code Action Provider for Dart files
+  // Register Code Action Provider for Dart files (only real files)
   context.subscriptions.push(
     vscode.languages.registerCodeActionsProvider(
-      { language: 'dart' },
+      { language: 'dart', scheme: 'file' },
       new FlutterCodeActionProvider(),
       {
         providedCodeActionKinds: FlutterCodeActionProvider.providedCodeActionKinds,
@@ -47,6 +48,21 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration(() => updateStatusBar())
   );
+
+  // Invalidate parse cache when documents change
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeTextDocument((e) => {
+      clearParseCache(e.document.uri);
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.workspace.onDidCloseTextDocument((doc) => {
+      clearParseCache(doc.uri);
+    })
+  );
 }
 
-export function deactivate() { }
+export function deactivate() {
+  clearParseCache();
+}

@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { WidgetClass, StateClass } from './parser';
+import { WidgetClass } from './parser';
 import { createTempFileUri, cleanupTempDir, getDirName } from './fileOps';
 
 export type OperationType = 'separate' | 'convert' | 'refactor' | undefined;
@@ -84,33 +84,32 @@ export async function showDiffPreview(
 ): Promise<boolean> {
   const dirName = getDirName(originalFileName);
 
-  try {
-    const tempOriginalUri = vscode.Uri.file(
-      createTempFileUri(dirName, `original_${path.basename(originalFileName)}`, originalContent)
-    );
-    const tempModifiedUri = vscode.Uri.file(
-      createTempFileUri(dirName, `modified_${path.basename(originalFileName)}`, modifiedContent)
-    );
+  const tempOriginalUri = vscode.Uri.file(
+    createTempFileUri(dirName, `original_${path.basename(originalFileName)}`, originalContent)
+  );
+  const tempModifiedUri = vscode.Uri.file(
+    createTempFileUri(dirName, `modified_${path.basename(originalFileName)}`, modifiedContent)
+  );
 
-    await vscode.commands.executeCommand(
-      'vscode.diff',
-      tempOriginalUri,
-      tempModifiedUri,
-      `${path.basename(originalFileName)}: Original ↔ ${modifiedLabel}`,
-      { preview: true }
-    );
+  await vscode.commands.executeCommand(
+    'vscode.diff',
+    tempOriginalUri,
+    tempModifiedUri,
+    `${path.basename(originalFileName)}: Original ↔ ${modifiedLabel}`,
+    { preview: true }
+  );
 
-    const choice = await vscode.window.showInformationMessage(
-      'Review the changes. Apply this migration?',
-      { modal: true },
-      'Apply',
-      'Cancel'
-    );
+  const choice = await vscode.window.showInformationMessage(
+    'Review the changes. Apply this migration?',
+    { modal: true },
+    'Apply',
+    'Cancel'
+  );
 
-    return choice === 'Apply';
-  } finally {
-    cleanupTempDir(dirName);
-  }
+  // Clean up temp files after the user makes a choice
+  cleanupTempDir(dirName);
+
+  return choice === 'Apply';
 }
 
 export async function showSummary(
@@ -171,9 +170,14 @@ export function showProgress<T>(
     },
     async (progress) => {
       progress.report({ increment: 0 });
-      const result = await task();
-      progress.report({ increment: 100 });
-      return result;
+      try {
+        const result = await task();
+        progress.report({ increment: 100 });
+        return result;
+      } catch (err) {
+        vscode.window.showErrorMessage(`Operation failed: ${err}`);
+        throw err;
+      }
     }
   );
 }

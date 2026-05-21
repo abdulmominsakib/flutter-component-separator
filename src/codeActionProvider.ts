@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
-import { parseFile } from './parser';
+import { parseFile, ParsedFile } from './parser';
+import { getCachedParse, setCachedParse } from './config';
 
 export class FlutterCodeActionProvider implements vscode.CodeActionProvider {
   public static readonly providedCodeActionKinds = [
@@ -16,8 +17,13 @@ export class FlutterCodeActionProvider implements vscode.CodeActionProvider {
       return undefined;
     }
 
-    const text = document.getText();
-    const parsed = parseFile(text);
+    // Use cached parse if available
+    let parsed: ParsedFile | null = getCachedParse(document);
+    if (!parsed) {
+      const text = document.getText();
+      parsed = parseFile(text);
+      setCachedParse(document, parsed);
+    }
 
     if (parsed.widgets.length === 0) {
       return undefined;
@@ -37,7 +43,7 @@ export class FlutterCodeActionProvider implements vscode.CodeActionProvider {
 
     const actions: vscode.CodeAction[] = [];
     const hasStatefulWidgets = parsed.widgets.some(
-      (w, i) => w.isStatefulWidget && parsed.stateMap.has(i)
+      (w, i) => w.isStatefulWidget && parsed!.stateMap.has(i)
     );
     const hasExtraClasses = parsed.widgets.length > 1;
 
@@ -71,8 +77,8 @@ export class FlutterCodeActionProvider implements vscode.CodeActionProvider {
       actions.push(separateAction);
     }
 
-    // If there are multiple operations available, offer Full Refactor
-    if ((hasExtraClasses || hasStatefulWidgets) && actions.length > 0) {
+    // Always offer Full Refactor if any operations are available
+    if (hasExtraClasses || hasStatefulWidgets) {
       const refactorAction = new vscode.CodeAction(
         'Flutter: Full Refactor (Separate + Convert)',
         vscode.CodeActionKind.RefactorRewrite
