@@ -1,4 +1,4 @@
-import { parseFile, WidgetClass, StateClass } from '../parser';
+import { parseFile, WidgetClass, StateClass, detectDependencies, expandTransitiveDependencies } from '../parser';
 import {
   assertEqual,
   assertTrue,
@@ -391,6 +391,130 @@ class _DashboardScreenState extends State<DashboardScreen> {
       assertTrue(result.widgets[2].isStatefulWidget, 'third is StatefulWidget');
       assertNotNull(result.stateMap.get(0), 'state for first');
       assertNotNull(result.stateMap.get(2), 'state for third');
+    }],
+
+    // ─── detectDependencies tests ─────────────────────────────────────
+    ['detects dependencies between widgets correctly', () => {
+      const text = `
+class MainWidget extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Column(children: [
+      WidgetA(),
+      _WidgetB(),
+    ]);
+  }
+}
+
+class WidgetA extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return _WidgetB();
+  }
+}
+
+class _WidgetB extends StatefulWidget {
+  @override
+  State<_WidgetB> createState() => __WidgetBState();
+}
+
+class __WidgetBState extends State<_WidgetB> {
+  @override
+  Widget build(BuildContext context) {
+    return WidgetC();
+  }
+}
+
+class WidgetC extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Text('Hello');
+  }
+}
+`;
+      const parsed = parseFile(text);
+      assertEqual(parsed.widgets.length, 5, 'five classes parsed including state classes');
+      // Indices:
+      // 0: MainWidget
+      // 1: WidgetA
+      // 2: WidgetB (isPrivate: true, name: WidgetB)
+      // 3: _WidgetBState (State class)
+      // 4: WidgetC
+
+      const deps = detectDependencies(parsed.widgets, parsed.stateMap);
+
+      // MainWidget depends on WidgetA and WidgetB
+      const mainDeps = deps.get(0) || [];
+      assertEqual(mainDeps.length, 2, 'MainWidget has 2 dependencies');
+      assertTrue(mainDeps.includes(1), 'MainWidget depends on WidgetA');
+      assertTrue(mainDeps.includes(2), 'MainWidget depends on WidgetB');
+
+      // WidgetA depends on WidgetB
+      const aDeps = deps.get(1) || [];
+      assertEqual(aDeps.length, 1, 'WidgetA has 1 dependency');
+      assertTrue(aDeps.includes(2), 'WidgetA depends on WidgetB');
+
+      // WidgetB (State class build body references WidgetC) depends on WidgetC
+      const bDeps = deps.get(2) || [];
+      assertEqual(bDeps.length, 1, 'WidgetB has 1 dependency');
+      assertTrue(bDeps.includes(4), 'WidgetB depends on WidgetC');
+
+      // WidgetC has no dependencies
+      const cDeps = deps.get(4) || [];
+      assertEqual(cDeps.length, 0, 'WidgetC has 0 dependencies');
+    }],
+
+    ['expands transitive dependencies correctly', () => {
+      const text = `
+class MainWidget extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return WidgetA();
+  }
+}
+
+class WidgetA extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return WidgetB();
+  }
+}
+
+class WidgetB extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return WidgetC();
+  }
+}
+
+class WidgetC extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Text('Hello');
+  }
+}
+`;
+      const parsed = parseFile(text);
+      // Indices:
+      // 0: MainWidget
+      // 1: WidgetA
+      // 2: WidgetB
+      // 3: WidgetC
+
+      const deps = detectDependencies(parsed.widgets, parsed.stateMap);
+
+      // If we select WidgetC (index 3)
+      // Since WidgetB depends on WidgetC, WidgetB must be separated.
+      // Since WidgetA depends on WidgetB, WidgetA must be separated.
+      // So selected = {3} should expand to {1, 2, 3}
+      const selected = new Set<number>([3]);
+      const expanded = expandTransitiveDependencies(selected, parsed.widgets, deps);
+
+      assertEqual(expanded.size, 3, 'expanded to 3 widgets');
+      assertTrue(expanded.has(1), 'WidgetA is included');
+      assertTrue(expanded.has(2), 'WidgetB is included');
+      assertTrue(expanded.has(3), 'WidgetC is included');
+      assertTrue(!expanded.has(0), 'MainWidget (index 0) is not included');
     }],
   ]);
 }

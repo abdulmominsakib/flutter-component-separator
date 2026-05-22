@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
-import { parseFile, WidgetClass } from './parser';
+import * as path from 'path';
+import { parseFile, WidgetClass, ParsedFile, detectDependencies, expandTransitiveDependencies } from './parser';
 import { convertStatefulToStateless, replaceWidgetPairInContent } from './converter';
 import {
   pascalToSnake,
@@ -15,7 +16,6 @@ import { ensureDir, getDirName, joinPath } from './fileOps';
 import {
   pickOperation,
   pickTargetWidgets,
-  showDiffPreview,
   showSummary,
   confirmMakePublic,
   showProgress,
@@ -51,81 +51,160 @@ async function applyDocumentEdit(filePath: string, newContent: string): Promise<
   await doc.save();
 }
 
+interface ExtractionResult {
+  mainContent: string;
+  componentFiles: { path: string; content: string }[];
+  separatedCount: number;
+}
+
+async function performExtractions(
+  content: string,
+  filePath: string,
+  parsed: ParsedFile,
+  finalSeparatedIndices: Set<number>,
+  deps: Map<number, number[]>,
+  componentsDir: string,
+  componentsFolderName: string
+): Promise<ExtractionResult> {
+  const renames = new Map<string, string>();
+  const finalizedNames = new Map<number, string>();
+
+  // Determine finalized class names and renames
+  for (let i = 0; i < parsed.widgets.length; i++) {
+    const w = parsed.widgets[i];
+    if (w.baseClass.startsWith('State<')) {
+      continue;
+    }
+    let finalName = w.isPrivate ? `_${w.name}` : w.name;
+    if (finalSeparatedIndices.has(i) && w.isPrivate) {
+      const makePublic = await confirmMakePublic(w.name);
+      if (makePublic) {
+        finalName = w.name;
+        renames.set(`_${w.name}`, w.name);
+      }
+    }
+    finalizedNames.set(i, finalName);
+  }
+
+  let mainContent = content;
+  const componentFiles: { path: string; content: string }[] = [];
+  const newImports: string[] = [];
+
+  const sortedSeparatedIndices = Array.from(finalSeparatedIndices).sort((a, b) => b - a);
+
+  for (const idx of sortedSeparatedIndices) {
+    const widget = parsed.widgets[idx];
+    const state = parsed.stateMap.get(idx);
+
+    let componentContent = widget.fullMatch;
+    if (state) {
+      componentContent += '\n\n' + state.fullMatch;
+    }
+
+    const widgetDeps = deps.get(idx) || [];
+    const componentImports = adjustImports(parsed.imports);
+
+    let hasMainFileDep = false;
+    for (const depIdx of widgetDeps) {
+      if (finalSeparatedIndices.has(depIdx)) {
+        const depName = finalizedNames.get(depIdx)!;
+        const siblingFileName = `${pascalToSnake(depName)}.dart`;
+        componentImports.push(`import '${siblingFileName}';`);
+      } else {
+        hasMainFileDep = true;
+      }
+    }
+
+    if (hasMainFileDep) {
+      let relativeImportPath = path.relative(componentsDir, filePath);
+      relativeImportPath = relativeImportPath.replace(/\\/g, '/');
+      componentImports.push(`import '${relativeImportPath}';`);
+    }
+
+    const uniqueImports = Array.from(new Set(componentImports));
+    componentContent = wrapWithImports(componentContent, uniqueImports);
+
+    for (const [oldName, newName] of renames.entries()) {
+      componentContent = updateReferencesInFile(componentContent, oldName, newName);
+    }
+
+    const componentFileName = `${pascalToSnake(finalizedNames.get(idx)!)}.dart`;
+    const componentFilePath = joinPath(componentsDir, componentFileName);
+
+    const newImport = `import '${componentsFolderName}/${componentFileName}';`;
+    newImports.push(newImport);
+
+    mainContent = stripClassFromContent(mainContent, widget.fullMatch);
+    if (state) {
+      mainContent = stripClassFromContent(mainContent, state.fullMatch);
+    }
+
+    componentFiles.push({ path: componentFilePath, content: componentContent });
+  }
+
+  for (const [oldName, newName] of renames.entries()) {
+    mainContent = updateReferencesInFile(mainContent, oldName, newName);
+  }
+
+  mainContent = insertImportsAfterExisting(mainContent, newImports);
+  mainContent = cleanBlankLines(mainContent);
+
+  return {
+    mainContent,
+    componentFiles,
+    separatedCount: finalSeparatedIndices.size,
+  };
+}
+
 async function separateComponents(text: string, filePath: string): Promise<boolean> {
   const dirName = getDirName(filePath);
   const config = getConfig();
   const componentsDir = joinPath(dirName, config.componentsFolderName);
 
   const parsed = parseFile(text);
-  if (parsed.widgets.length <= 1) {
+
+  const pickableItems = parsed.widgets
+    .map((w, i) => ({ widget: w, originalIndex: i }))
+    .slice(1)
+    .filter(item => !item.widget.baseClass.startsWith('State<'));
+
+  if (pickableItems.length === 0) {
     vscode.window.showInformationMessage('No additional widget classes found to separate.');
     return false;
   }
 
   const targetIndices = await pickTargetWidgets(
-    parsed.widgets.slice(1),
+    pickableItems.map(item => item.widget),
     'Select widget classes to separate into files'
   );
   if (targetIndices.length === 0) { return false; }
 
-  // Map pick indices back to original widget indices (slice(1) offset = +1)
-  const actualIndices = targetIndices.map(i => i + 1);
-  // Sort descending so we strip from the end first, preserving earlier offsets
-  actualIndices.sort((a, b) => b - a);
+  const selectedOriginalIndices = new Set<number>(targetIndices.map(i => pickableItems[i].originalIndex));
 
-  let mainContent = text;
-  const componentFiles: { path: string; content: string }[] = [];
+  const deps = detectDependencies(parsed.widgets, parsed.stateMap);
 
-  for (const idx of actualIndices) {
-    const widget = parsed.widgets[idx];
-    let componentContent = widget.fullMatch;
-    let className = widget.name;
+  const finalSeparatedIndices = expandTransitiveDependencies(selectedOriginalIndices, parsed.widgets, deps);
 
-    if (widget.isPrivate) {
-      const makePublic = await confirmMakePublic(className);
-      if (makePublic) {
-        const oldClassName = `_${className}`;
-        const newClassName = className;
-        componentContent = makeWidgetPublic(componentContent, oldClassName, newClassName);
-        mainContent = updateReferencesInFile(mainContent, oldClassName, newClassName);
-      }
-    }
-
-    componentContent = wrapWithImports(componentContent, adjustImports(parsed.imports));
-
-    const componentFileName = `${pascalToSnake(className)}.dart`;
-    const componentFilePath = joinPath(componentsDir, componentFileName);
-
-    const newImport = `import '${config.componentsFolderName}/${componentFileName}';`;
-    mainContent = insertImportsAfterExisting(mainContent, [newImport]);
-    mainContent = stripClassFromContent(mainContent, widget.fullMatch);
-
-    componentFiles.push({ path: componentFilePath, content: componentContent });
-  }
-
-  mainContent = cleanBlankLines(mainContent);
-
-  const mainWidgetName = parsed.widgets[0]?.name || '';
-  const confirmed = await showDiffPreview(
+  const extraction = await performExtractions(
     text,
-    mainContent,
     filePath,
-    'Separated Components'
+    parsed,
+    finalSeparatedIndices,
+    deps,
+    componentsDir,
+    config.componentsFolderName
   );
 
-  if (confirmed) {
-    ensureDir(componentsDir);
-    for (const cf of componentFiles) {
-      // Use fs for new files; WorkspaceEdit only works for existing documents
-      const fs = await import('fs');
-      fs.writeFileSync(cf.path, cf.content);
-    }
-    await applyDocumentEdit(filePath, mainContent);
-    await showSummary(mainWidgetName, actualIndices.length, 0, []);
-    return true;
+  ensureDir(componentsDir);
+  for (const cf of extraction.componentFiles) {
+    const fs = await import('fs');
+    fs.writeFileSync(cf.path, cf.content);
   }
+  await applyDocumentEdit(filePath, extraction.mainContent);
 
-  return false;
+  const mainWidgetName = parsed.widgets[0]?.name || '';
+  await showSummary(mainWidgetName, extraction.separatedCount, 0, []);
+  return true;
 }
 
 async function convertToStateless(text: string, filePath: string): Promise<boolean> {
@@ -175,34 +254,22 @@ async function convertToStateless(text: string, filePath: string): Promise<boole
 
   modifiedContent = cleanBlankLines(modifiedContent);
 
-  const confirmed = await showDiffPreview(
-    text,
-    modifiedContent,
-    filePath,
-    `StatelessWidget Conversion (${convertedCount} widget(s))`
-  );
-
-  if (confirmed) {
-    await applyDocumentEdit(filePath, modifiedContent);
-    await showSummary('', 0, convertedCount, allWarnings);
-    return true;
-  }
-
-  return false;
+  await applyDocumentEdit(filePath, modifiedContent);
+  await showSummary('', 0, convertedCount, allWarnings);
+  return true;
 }
 
 async function fullRefactor(text: string, filePath: string): Promise<boolean> {
-  const parsed = parseFile(text);
+  const originalParsed = parseFile(text);
   const dirName = getDirName(filePath);
   const config = getConfig();
   const componentsDir = joinPath(dirName, config.componentsFolderName);
 
   // Build list of extractable widgets with their original indices
   const extractableItems: { widget: WidgetClass; originalIndex: number }[] = [];
-  for (let i = 1; i < parsed.widgets.length; i++) {
-    const w = parsed.widgets[i];
-    // Only extract widgets that are NOT StatefulWidget with a State class
-    if (!w.isStatefulWidget || !parsed.stateMap.has(i)) {
+  for (let i = 1; i < originalParsed.widgets.length; i++) {
+    const w = originalParsed.widgets[i];
+    if (!w.baseClass.startsWith('State<')) {
       extractableItems.push({ widget: w, originalIndex: i });
     }
   }
@@ -215,15 +282,16 @@ async function fullRefactor(text: string, filePath: string): Promise<boolean> {
     : [];
 
   const statefulIndices: number[] = [];
-  for (let i = 0; i < parsed.widgets.length; i++) {
-    if (parsed.widgets[i].isStatefulWidget && parsed.stateMap.has(i)) {
+  for (let i = 0; i < originalParsed.widgets.length; i++) {
+    const w = originalParsed.widgets[i];
+    if (w.isStatefulWidget && originalParsed.stateMap.has(i)) {
       statefulIndices.push(i);
     }
   }
 
   const convertTargets = statefulIndices.length > 0
     ? await pickTargetWidgets(
-        statefulIndices.map(i => parsed.widgets[i]),
+        statefulIndices.map(i => originalParsed.widgets[i]),
         'Select StatefulWidget classes to convert to StatelessWidget'
       )
     : [];
@@ -232,27 +300,30 @@ async function fullRefactor(text: string, filePath: string): Promise<boolean> {
     return false;
   }
 
+  // Get names of widgets chosen for conversion and extraction
+  const convertNames = new Set(convertTargets.map(i => originalParsed.widgets[statefulIndices[i]].name));
+  const extractNames = new Set(extractIndices.map(i => extractableItems[i].widget.name));
+
   // Step 1: Perform conversions in reverse order on original text
-  let mainContent = text;
+  let convertedContent = text;
   let convertedCount = 0;
   const allWarnings: string[] = [];
 
   if (convertTargets.length > 0) {
     const actualConvertIndices = convertTargets.map(i => statefulIndices[i]);
-    // Sort descending to preserve offsets
     actualConvertIndices.sort((a, b) => b - a);
 
     for (const idx of actualConvertIndices) {
-      const widget = parsed.widgets[idx];
-      const state = parsed.stateMap.get(idx)!;
+      const widget = originalParsed.widgets[idx];
+      const state = originalParsed.stateMap.get(idx)!;
       const result = convertStatefulToStateless(widget, state);
 
       allWarnings.push(
         ...result.warnings.map(w => `${result.originalWidgetName}: ${w}`)
       );
 
-      mainContent = replaceWidgetPairInContent(
-        mainContent,
+      convertedContent = replaceWidgetPairInContent(
+        convertedContent,
         { ...widget, startOffset: widget.startOffset, endOffset: widget.endOffset },
         { ...state, startOffset: state.startOffset, endOffset: state.endOffset },
         result.newContent
@@ -262,67 +333,55 @@ async function fullRefactor(text: string, filePath: string): Promise<boolean> {
     }
   }
 
-  // Step 2: Perform extractions in reverse order on the converted text
+  // Step 2: Perform extractions on the converted text
+  let mainContent = convertedContent;
   let separatedCount = 0;
   const componentFiles: { path: string; content: string }[] = [];
 
-  if (extractIndices.length > 0) {
-    // Get original indices and sort descending
-    const actualExtractIndices = extractIndices
-      .map(i => extractableItems[i].originalIndex)
-      .sort((a, b) => b - a);
+  if (extractNames.size > 0) {
+    const parsed = parseFile(convertedContent);
 
-    for (const idx of actualExtractIndices) {
-      const widget = parsed.widgets[idx];
-      let componentContent = widget.fullMatch;
-      let className = widget.name;
-
-      if (widget.isPrivate) {
-        const makePublic = await confirmMakePublic(className);
-        if (makePublic) {
-          const oldClassName = `_${className}`;
-          const newClassName = className;
-          componentContent = makeWidgetPublic(componentContent, oldClassName, newClassName);
-          mainContent = updateReferencesInFile(mainContent, oldClassName, newClassName);
-        }
+    // Map names back to original indices in the new parsed structure
+    const selectedOriginalIndices = new Set<number>();
+    for (let i = 1; i < parsed.widgets.length; i++) {
+      const w = parsed.widgets[i];
+      if (extractNames.has(w.name)) {
+        selectedOriginalIndices.add(i);
       }
-
-      componentContent = wrapWithImports(componentContent, adjustImports(parsed.imports));
-
-      const componentFileName = `${pascalToSnake(className)}.dart`;
-      const componentFilePath = joinPath(componentsDir, componentFileName);
-
-      const newImport = `import '${config.componentsFolderName}/${componentFileName}';`;
-      mainContent = insertImportsAfterExisting(mainContent, [newImport]);
-      mainContent = stripClassFromContent(mainContent, widget.fullMatch);
-
-      componentFiles.push({ path: componentFilePath, content: componentContent });
-      separatedCount++;
     }
+
+    const deps = detectDependencies(parsed.widgets, parsed.stateMap);
+
+    const finalSeparatedIndices = expandTransitiveDependencies(selectedOriginalIndices, parsed.widgets, deps);
+
+    const extraction = await performExtractions(
+      convertedContent,
+      filePath,
+      parsed,
+      finalSeparatedIndices,
+      deps,
+      componentsDir,
+      config.componentsFolderName
+    );
+
+    mainContent = extraction.mainContent;
+    separatedCount = extraction.separatedCount;
+    componentFiles.push(...extraction.componentFiles);
+  } else {
+    mainContent = cleanBlankLines(mainContent);
   }
 
-  mainContent = cleanBlankLines(mainContent);
-
-  const mainWidgetName = parsed.widgets[0]?.name || '';
-  const confirmed = await showDiffPreview(
-    text,
-    mainContent,
-    filePath,
-    `Full Refactor (${separatedCount} extracted, ${convertedCount} converted)`
-  );
-
-  if (confirmed) {
-    ensureDir(componentsDir);
-    for (const cf of componentFiles) {
-      const fs = await import('fs');
-      fs.writeFileSync(cf.path, cf.content);
-    }
-    await applyDocumentEdit(filePath, mainContent);
-    await showSummary(mainWidgetName, separatedCount, convertedCount, allWarnings);
-    return true;
+  // Write new component files directly and apply document edit, bypassing showDiffPreview!
+  ensureDir(componentsDir);
+  for (const cf of componentFiles) {
+    const fs = await import('fs');
+    fs.writeFileSync(cf.path, cf.content);
   }
+  await applyDocumentEdit(filePath, mainContent);
 
-  return false;
+  const mainWidgetName = originalParsed.widgets[0]?.name || '';
+  await showSummary(mainWidgetName, separatedCount, convertedCount, allWarnings);
+  return true;
 }
 
 export async function separateFlutterComponentsCommand(): Promise<void> {

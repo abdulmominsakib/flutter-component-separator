@@ -200,7 +200,7 @@ function extractBuildMethodBody(stateBody: string): string {
 }
 
 function findStateClass(text: string, widgetName: string, widgetIndex: number): StateClass | null {
-  const pattern = new RegExp(`class\\s+_${widgetName}State\\s+extends\\s+State<${widgetName}>\\s*\\{`);
+  const pattern = new RegExp(`class\\s+__?${widgetName}State\\s+extends\\s+State<_?${widgetName}>\\s*\\{`);
 
   const match = pattern.exec(text);
   if (match) {
@@ -284,3 +284,69 @@ export function isStatefulWidget(widget: WidgetClass): boolean {
 export function isStatelessWidget(widget: WidgetClass): boolean {
   return STATELESS_WIDGET_RE.test(widget.fullMatch);
 }
+
+export function detectDependencies(
+  widgets: WidgetClass[],
+  stateMap: Map<number, StateClass>
+): Map<number, number[]> {
+  const dependencyMap = new Map<number, number[]>();
+
+  for (let i = 0; i < widgets.length; i++) {
+    const w = widgets[i];
+    if (w.baseClass.startsWith('State<')) {
+      continue;
+    }
+    let totalText = w.fullMatch;
+    const state = stateMap.get(i);
+    if (state) {
+      totalText += '\n' + state.fullMatch;
+    }
+
+    const dependencies: number[] = [];
+    for (let j = 0; j < widgets.length; j++) {
+      if (i === j) { continue; }
+      const other = widgets[j];
+      if (other.baseClass.startsWith('State<')) {
+        continue;
+      }
+      const pattern = new RegExp(`\\b_?${other.name}\\b`);
+      if (pattern.test(totalText)) {
+        dependencies.push(j);
+      }
+    }
+    dependencyMap.set(i, dependencies);
+  }
+
+  return dependencyMap;
+}
+
+export function expandTransitiveDependencies(
+  selectedIndices: Set<number>,
+  widgets: WidgetClass[],
+  deps: Map<number, number[]>
+): Set<number> {
+  const finalSeparatedIndices = new Set<number>(selectedIndices);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let i = 1; i < widgets.length; i++) {
+      const w = widgets[i];
+      if (w.baseClass.startsWith('State<')) {
+        continue;
+      }
+      if (finalSeparatedIndices.has(i)) {
+        continue;
+      }
+      const widgetDeps = deps.get(i) || [];
+      for (const depIdx of widgetDeps) {
+        if (finalSeparatedIndices.has(depIdx)) {
+          finalSeparatedIndices.add(i);
+          changed = true;
+          break;
+        }
+      }
+    }
+  }
+  return finalSeparatedIndices;
+}
+
